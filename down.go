@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
+	"sync"
 )
 
 func getHeaders(url string) (header *http.Response) {
@@ -15,30 +18,59 @@ func getHeaders(url string) (header *http.Response) {
 	return
 }
 
-func downPart(url string, dataChan chan []byte, range1, range2 int) []byte {
+func downPart(wg *sync.WaitGroup, url string, dataChan chan []byte, range1, range2 int) {
+
+	defer wg.Done()
 	client := new(http.Client)
 	req, _ := http.NewRequest("GET", url, nil)
 
 	req.Header.Set("Range", strconv.Itoa(range1)+"-"+strconv.Itoa(range2))
-	data, _ := client.Do(req)
+	data, err := client.Do(req)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	dataByte := new(bytes.Buffer)
 	dataByte.ReadFrom(data.Body)
 	fmt.Println("Done")
-	return dataByte.Bytes()
+
+	dataChan <- dataByte.Bytes()
 }
 func multiDownload(url string, length int) bool {
+	var wg sync.WaitGroup
+
 	x := 4
 	split := length / x
 	fmt.Println(length)
 	dataChan := make([]chan []byte, x)
+	for i := range dataChan {
+		dataChan[i] = make(chan []byte, 1)
+	}
+
 	for i := 0; i < x; i++ {
+		wg.Add(1)
+
 		range1 := i * split
 		range2 := (i+1)*split - 1
 		if range2 == length-2 {
 			range2 = length
 		}
 		fmt.Println(len(dataChan), range1, range2)
-		go downPart(url, dataChan[i], i*split, i+1*split)
+		go downPart(&wg, url, dataChan[i], range1, range2)
+	}
+	fmt.Println("waiting")
+
+	var data []byte
+	wg.Wait()
+
+	for i := 0; i < x; i++ {
+		fmt.Println("waiting")
+		data = <-dataChan[i]
+		if i == 0 {
+			ioutil.WriteFile("b.jpg", data, 0777)
+		} else {
+			ioutil.WriteFile("b.jpg", data, os.ModeAppend)
+		}
 	}
 	//ioutil.WriteFile("ba.jpg", dataByte.Bytes(), 0777)
 	return true
