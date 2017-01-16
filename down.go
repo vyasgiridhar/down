@@ -7,47 +7,73 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+
+	"github.com/urfave/cli"
 )
 
-func getHeaders(url string) (header *http.Response) {
+func getHeadersAndStart(url, output string, g int) {
+
 	client := new(http.Client)
 
-	req, _ := http.NewRequest("HEAD", url, nil)
-	header, _ = client.Do(req)
-	return
+	req, err := http.NewRequest("HEAD", url, nil)
+	if err != nil {
+		fmt.Println("HEAD request failed")
+		os.Exit(3)
+	}
+
+	header, httperr := client.Do(req)
+	if httperr != nil {
+		fmt.Println("HEAD request failed")
+		os.Exit(3)
+	}
+	fmt.Println(header.Header)
+	if header.Header.Get("Accept-Ranges") == "bytes" {
+		fmt.Println("Downloading")
+		length, err := strconv.Atoi(header.Header.Get("Content-Length"))
+		if err != nil {
+			fmt.Println("Content-Length could not be parsed")
+			os.Exit(4)
+		}
+		if output == "" {
+			output = strings.Replace(strings.Split(header.Header.Get("Content-Disposition"), "filename=")[1], "]", "", 2)
+		}
+		multiDownload(url, output, length, g)
+	}
+
 }
 
 func downPart(wg *sync.WaitGroup, url string, dataChan chan []byte, range1, range2 int) {
 
 	defer wg.Done()
 	client := new(http.Client)
-	req, _ := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		fmt.Println("GET request failed")
+		os.Exit(2)
+	}
 
 	req.Header.Set("Range", strconv.Itoa(range1)+"-"+strconv.Itoa(range2))
 	data, err := client.Do(req)
 	if err != nil {
-		fmt.Println(err)
-		return
+		fmt.Println("GET request failed")
+		os.Exit(2)
 	}
 	dataByte := new(bytes.Buffer)
 	dataByte.ReadFrom(data.Body)
-	fmt.Println("Done")
 
 	dataChan <- dataByte.Bytes()
 }
-func multiDownload(url string, length int) bool {
+
+func multiDownload(url, output string, length, g int) bool {
 	var wg sync.WaitGroup
 
-	x := 4
-	split := length / x
+	split := length / g
 	fmt.Println(length)
-	dataChan := make([]chan []byte, x)
-	for i := range dataChan {
-		dataChan[i] = make(chan []byte, 1)
-	}
+	dataChan := make(chan []byte)
 
-	for i := 0; i < x; i++ {
+	for i := 0; i < g; i++ {
 		wg.Add(1)
 
 		range1 := i * split
@@ -55,33 +81,62 @@ func multiDownload(url string, length int) bool {
 		if range2 == length-2 {
 			range2 = length
 		}
-		fmt.Println(len(dataChan), range1, range2)
-		go downPart(&wg, url, dataChan[i], range1, range2)
+		go downPart(&wg, url, dataChan, range1, range2)
 	}
-	fmt.Println("waiting")
 
-	var data []byte
-	wg.Wait()
+	go func() {
+		wg.Wait()
+		close(dataChan)
+	}()
 
-	for i := 0; i < x; i++ {
-		fmt.Println("waiting")
-		data = <-dataChan[i]
-		if i == 0 {
-			ioutil.WriteFile("b.jpg", data, 0777)
-		} else {
-			ioutil.WriteFile("b.jpg", data, os.ModeAppend)
+	for data := range dataChan {
+		if output == "" {
+			fileName := strings.Split(url, "/")
+			output = fileName[len(fileName)-1]
 		}
+		ioutil.WriteFile(fileName[len(fileName)-1], data, os.ModeAppend)
+		os.Chmod(fileName[len(fileName)-1], 0777)
 	}
-	//ioutil.WriteFile("ba.jpg", dataByte.Bytes(), 0777)
 	return true
 }
 
 func main() {
-	header := getHeaders("https://i.redd.it/sjqcrazacd9y.jpg")
-	if header.Header.Get("Accept-Ranges") == "bytes" {
-		fmt.Println("Downloading")
-		length, _ := strconv.Atoi(header.Header.Get("Content-Length"))
-		multiDownload("https://i.redd.it/sjqcrazacd9y.jpg", length)
+
+	app := cli.NewApp()
+	app.Name = "down"
+	app.Usage = "Multigoroutine downloader"
+	app.Flags = []cli.Flag{
+		cli.IntFlag{
+			Name:  "threads, g",
+			Value: 4,
+			Usage: "Number of simultaneous threads to use",
+		},
+		cli.StringFlag{
+			Name:  "output, o",
+			Value: "",
+			Usage: "Output file name",
+		},
 	}
+
+	app.Action = func(c *cli.Context) error {
+		var url string
+		if c.NArg() > 0 {
+			url = c.Args().Get(0)
+		}
+		if url == "" {
+			fmt.Println("URL not provided")
+			os.Exit(1)
+		} else {
+			g := c.Int("threads")
+			output := c.String("output")
+			if g == 0 {
+				g = 1
+			}
+			getHeadersAndStart(url, output, g)
+		}
+		return nil
+	}
+
+	app.Run(os.Args)
 
 }
