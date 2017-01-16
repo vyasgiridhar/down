@@ -94,8 +94,8 @@ func multiDownload(url, output string, length, g int) bool {
 			fileName := strings.Split(url, "/")
 			output = fileName[len(fileName)-1]
 		}
-		ioutil.WriteFile(fileName[len(fileName)-1], data, os.ModeAppend)
-		os.Chmod(fileName[len(fileName)-1], 0777)
+		ioutil.WriteFile(output, data, os.ModeAppend)
+		os.Chmod(output, 0777)
 	}
 	return true
 }
