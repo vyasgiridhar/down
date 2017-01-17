@@ -104,6 +104,7 @@ func main() {
 
 	app := cli.NewApp()
 	app.Name = "down"
+	app.Version = "1.0"
 	app.Usage = "Multigoroutine downloader"
 	app.Flags = []cli.Flag{
 		cli.IntFlag{
